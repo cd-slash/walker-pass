@@ -6,8 +6,6 @@ Designed for [Omarchy](https://github.com/basecamp/omarchy) and other Wayland de
 
 This is intended to be a more secure way of storing credentials like API keys vs. pinning to a clipboard manager.
 
-![walker-pass demo](https://github.com/cd-slash/walker-pass/assets/demo.gif)
-
 ## Features
 
 - Fuzzy search through all your pass secrets
