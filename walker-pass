@@ -1,0 +1,145 @@
+#!/bin/bash
+#
+# walker-pass - A Walker-based frontend for pass (password-store)
+# 
+# Usage:
+#   walker-pass              # Pick a secret and copy password to clipboard
+#   walker-pass --show       # Pick a secret and show all fields to choose from
+#   walker-pass --type       # Pick a secret and type it (wtype)
+#
+# Install:
+#   1. Copy this script to ~/.local/bin/walker-pass
+#   2. chmod +x ~/.local/bin/walker-pass
+#   3. Bind to a hotkey in Hyprland, e.g.:
+#      bind = $mainMod SHIFT, P, exec, walker-pass
+#
+
+set -euo pipefail
+
+PASS_DIR="${PASSWORD_STORE_DIR:-$HOME/.password-store}"
+CLIP_TIME="${PASSWORD_STORE_CLIP_TIME:-45}"
+
+# Parse arguments
+MODE="copy"  # copy, show, type
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --show|-s)
+            MODE="show"
+            shift
+            ;;
+        --type|-t)
+            MODE="type"
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+# Check if pass directory exists
+if [[ ! -d "$PASS_DIR" ]]; then
+    notify-send "walker-pass" "Password store not found at $PASS_DIR" --urgency=critical
+    exit 1
+fi
+
+# Show entries in walker and get selection
+select_entry() {
+    if [[ ! -d "$PASS_DIR" ]] || [[ -z "$(ls -A "$PASS_DIR"/*.gpg 2>/dev/null)" && -z "$(find "$PASS_DIR" -name "*.gpg" 2>/dev/null)" ]]; then
+        notify-send "walker-pass" "No secrets found in password store" --urgency=normal
+        exit 1
+    fi
+    
+    # Build list and pipe directly to walker (like working dmenu examples)
+    find "$PASS_DIR" -name "*.gpg" -type f 2>/dev/null | \
+        sed "s|$PASS_DIR/||; s|\.gpg$||" | \
+        sort | \
+        walker --dmenu -p "Secret"
+}
+
+# Get a specific field value
+get_field_value() {
+    local entry="$1"
+    local field="$2"
+    local content
+    content=$(pass show "$entry" 2>/dev/null) || return 1
+    
+    if [[ "$field" == "password" ]]; then
+        echo "$content" | head -n1
+    else
+        echo "$content" | grep -E "^${field}:" | sed "s/^${field}:[[:space:]]*//"
+    fi
+}
+
+# Copy to clipboard with auto-clear
+copy_to_clipboard() {
+    local value="$1"
+    local label="$2"
+    
+    # Copy to clipboard
+    echo -n "$value" | wl-copy
+    
+    # Schedule clipboard clear
+    (
+        sleep "$CLIP_TIME"
+        # Only clear if clipboard still contains our value
+        current=$(wl-paste 2>/dev/null || echo "")
+        if [[ "$current" == "$value" ]]; then
+            wl-copy --clear
+        fi
+    ) &
+    
+    notify-send "walker-pass" "$label copied to clipboard (clears in ${CLIP_TIME}s)" --urgency=low
+}
+
+# Type using wtype
+type_value() {
+    local value="$1"
+    
+    # Small delay to let walker close
+    sleep 0.1
+    wtype "$value"
+}
+
+# Main logic
+main() {
+    local entry
+    entry=$(select_entry)
+    
+    # Exit if no selection
+    if [[ -z "$entry" ]]; then
+        exit 0
+    fi
+    
+    case "$MODE" in
+        copy)
+            # Just copy the password
+            local password
+            password=$(get_field_value "$entry" "password")
+            copy_to_clipboard "$password" "Password"
+            ;;
+        
+        show)
+            # Show field picker
+            local field
+            field=$(pass show "$entry" 2>/dev/null | \
+                awk 'NR==1 {print "password"; next} /^[^:]+:/ {split($0,a,":"); print a[1]}' | \
+                walker --dmenu -p "Field")
+            
+            if [[ -n "$field" ]]; then
+                local value
+                value=$(get_field_value "$entry" "$field")
+                copy_to_clipboard "$value" "$field"
+            fi
+            ;;
+        
+        type)
+            # Type the password
+            local password
+            password=$(get_field_value "$entry" "password")
+            type_value "$password"
+            ;;
+    esac
+}
+
+main
